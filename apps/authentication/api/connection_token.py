@@ -98,11 +98,9 @@ class ClientProtocolMixin:
 
         if drives_redirect and asset:
             systemuser_actions_mapper = get_asset_system_user_ids_with_actions_by_user(user, asset)
-            actions = systemuser_actions_mapper.get(system_user.id, [])
+            actions = systemuser_actions_mapper.get(system_user.id, 0)
             if actions & Action.UPDOWNLOAD:
                 options['drivestoredirect:s'] = '*'
-            else:
-                raise NotHaveUpDownLoadPerm
 
         options['screen mode id:i'] = '2' if full_screen else '1'
         address = settings.TERMINAL_RDP_ADDR
