@@ -3,7 +3,11 @@
 from django.db import models
 from django.db.models import Q
 from django.utils.translation import ugettext_lazy as _
+from datetime import timedelta
+from django.db.utils import IntegrityError
 
+from common.exceptions import JMSException
+from common.utils.timezone import as_current_tz
 from common.mixins.models import CommonModelMixin
 from common.db.encoder import ModelJSONFieldEncoder
 from orgs.mixins.models import OrgModelMixin
@@ -73,6 +77,7 @@ class Ticket(CommonModelMixin, OrgModelMixin):
         'TicketFlow', related_name='tickets', on_delete=models.SET_NULL, null=True,
         verbose_name=_("TicketFlow")
     )
+    serial_num = models.CharField(max_length=256, unique=True, null=True, verbose_name=_('Serial number'))
 
     class Meta:
         ordering = ('-date_created',)
@@ -245,3 +250,36 @@ class Ticket(CommonModelMixin, OrgModelMixin):
     def body(self):
         _body = self.handler.get_body()
         return _body
+
+    def update_serial_num_if_need(self):
+        if self.serial_num:
+            return
+
+        try:
+            date_created = as_current_tz(self.date_created)
+            day_begin = date_created.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_begin + timedelta(days=1)
+            date_prefix = day_begin.strftime('%Y%m%d')
+
+            ticket = Ticket.objects.select_for_update().filter(
+                date_created__gte=day_begin, date_created__lt=day_end,
+                serial_num__isnull=False, serial_num__startswith=date_prefix
+            ).order_by('-date_created').first()
+
+            if ticket:
+                # 202212010001
+                num_str = ticket.serial_num[8:]
+                num = int(num_str)
+                num_suffix = '%04d' % (num+1)
+            else:
+                num_suffix = '0001'
+
+            self.serial_num = date_prefix + num_suffix
+            self.save(update_fields=('serial_num',))
+        except IntegrityError as e:
+            if e.args[0] == 1062:
+                # 虽然做了 `select_for_update` 但是每天的第一条工单仍可能造成冲突
+                # 但概率小，这里只报错，用户重新提交即可
+                raise JMSException(detail=_('Please try again'), code='please_try_again')
+
+            raise e
